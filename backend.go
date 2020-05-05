@@ -3,11 +3,10 @@ package jwtauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
-	"time"
 
 	"github.com/coreos/go-oidc"
-	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/patrickmn/go-cache"
@@ -31,7 +30,7 @@ type jwtAuthBackend struct {
 	*framework.Backend
 
 	l            sync.RWMutex
-	provider     *oidc.Provider
+	provider     *oidc.IDTokenVerifier
 	keySet       oidc.KeySet
 	cachedConfig *jwtConfig
 	oidcStates   *cache.Cache
@@ -43,7 +42,6 @@ type jwtAuthBackend struct {
 func backend() *jwtAuthBackend {
 	b := new(jwtAuthBackend)
 	b.providerCtx, b.providerCtxCancel = context.WithCancel(context.Background())
-	b.oidcStates = cache.New(oidcStateTimeout, 1*time.Minute)
 
 	b.Backend = &framework.Backend{
 		AuthRenew:   b.pathLoginRenew,
@@ -73,7 +71,6 @@ func backend() *jwtAuthBackend {
 				// Uncomment to mount simple UI handler for local development
 				// pathUI(b),
 			},
-			pathOIDC(b),
 		),
 		Clean: b.cleanup,
 	}
@@ -103,7 +100,7 @@ func (b *jwtAuthBackend) reset() {
 	b.l.Unlock()
 }
 
-func (b *jwtAuthBackend) getProvider(config *jwtConfig) (*oidc.Provider, error) {
+func (b *jwtAuthBackend) getProvider(config *jwtConfig) (*oidc.IDTokenVerifier, error) {
 	b.l.RLock()
 	unlockFunc := b.l.RUnlock
 	defer func() { unlockFunc() }()
@@ -129,25 +126,31 @@ func (b *jwtAuthBackend) getProvider(config *jwtConfig) (*oidc.Provider, error) 
 	return provider, nil
 }
 
+func (b *jwtAuthBackend) createProvider(config *jwtConfig) (*oidc.IDTokenVerifier, error) {
+	_, err := b.getKeySet(config)
+	if err != nil {
+		return nil, errors.New("provider error: keyset retrieval error")
+	}
+	if config.AuthDomain == "" {
+		return nil, errors.New("provider error: audience_tag not configured")
+	}
+	oauthConfig := &oidc.Config{
+		ClientID: config.AudienceTag,
+	}
+	return oidc.NewVerifier(config.AuthDomain, b.keySet, oauthConfig), nil
+}
+
 // getKeySet returns a new JWKS KeySet based on the provided config.
 func (b *jwtAuthBackend) getKeySet(config *jwtConfig) (oidc.KeySet, error) {
-	b.l.Lock()
-	defer b.l.Unlock()
-
 	if b.keySet != nil {
 		return b.keySet, nil
 	}
 
-	if config.JWKSURL == "" {
-		return nil, errors.New("keyset error: jwks_url not configured")
+	if config.AuthDomain == "" {
+		return nil, errors.New("keyset error: auth_domain not configured")
 	}
-
-	ctx, err := b.createCAContext(b.providerCtx, config.JWKSCAPEM)
-	if err != nil {
-		return nil, errwrap.Wrapf("error parsing jwks_ca_pem: {{err}}", err)
-	}
-
-	b.keySet = oidc.NewRemoteKeySet(ctx, config.JWKSURL)
+	certsURL := fmt.Sprintf("%s/cdn-cgi/access/certs", config.AuthDomain)
+	b.keySet = oidc.NewRemoteKeySet(b.providerCtx, certsURL)
 
 	return b.keySet, nil
 }

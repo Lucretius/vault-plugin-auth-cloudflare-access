@@ -9,7 +9,6 @@ import (
 
 	"gopkg.in/square/go-jose.v2/jwt"
 
-	"github.com/hashicorp/go-sockaddr"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/strutil"
 	"github.com/hashicorp/vault/sdk/helper/tokenutil"
@@ -48,11 +47,6 @@ func pathRole(b *jwtAuthBackend) *framework.Path {
 				Type:        framework.TypeLowerCaseString,
 				Description: "Name of the role.",
 			},
-			"role_type": {
-				Type:        framework.TypeString,
-				Description: "Type of the role, either 'jwt' or 'oidc'.",
-			},
-
 			"policies": {
 				Type:        framework.TypeCommaStringSlice,
 				Description: tokenutil.DeprecationText("token_policies"),
@@ -78,11 +72,6 @@ func pathRole(b *jwtAuthBackend) *framework.Path {
 				Description: tokenutil.DeprecationText("token_period"),
 				Deprecated:  true,
 			},
-			"bound_cidrs": {
-				Type:        framework.TypeCommaStringSlice,
-				Description: tokenutil.DeprecationText("token_bound_cidrs"),
-				Deprecated:  true,
-			},
 			"expiration_leeway": {
 				Type: framework.TypeSignedDurationSecond,
 				Description: `Duration in seconds of leeway when validating expiration of a token to account for clock skew. 
@@ -105,10 +94,6 @@ Defaults to 60 (1 minute) if set to 0 and can be disabled if set to -1.`,
 				Type:        framework.TypeString,
 				Description: `The 'sub' claim that is valid for login. Optional.`,
 			},
-			"bound_audiences": {
-				Type:        framework.TypeCommaStringSlice,
-				Description: `Comma-separated list of 'aud' claims that are valid for login; any match is sufficient`,
-			},
 			"bound_claims_type": {
 				Type:        framework.TypeString,
 				Description: `How to interpret values in the map of claims/values (which must match for login): allowed values are 'string' or 'glob'`,
@@ -130,19 +115,9 @@ Defaults to 60 (1 minute) if set to 0 and can be disabled if set to -1.`,
 				Type:        framework.TypeString,
 				Description: `The claim to use for the Identity group alias names`,
 			},
-			"oidc_scopes": {
-				Type:        framework.TypeCommaStringSlice,
-				Description: `Comma-separated list of OIDC scopes`,
-			},
 			"allowed_redirect_uris": {
 				Type:        framework.TypeCommaStringSlice,
 				Description: `Comma-separated list of allowed values for redirect_uri`,
-			},
-			"verbose_oidc_logging": {
-				Type: framework.TypeBool,
-				Description: `Log received OIDC tokens and claims when debug-level logging is active. 
-Not recommended in production since sensitive information may be present 
-in OIDC responses.`,
 			},
 		},
 		ExistenceCheck: b.pathRoleExistenceCheck,
@@ -180,8 +155,6 @@ in OIDC responses.`,
 type jwtRole struct {
 	tokenutil.TokenParams
 
-	RoleType string `json:"role_type"`
-
 	// Duration of leeway for expiration to account for clock skew
 	ExpirationLeeway time.Duration `json:"expiration_leeway"`
 
@@ -192,24 +165,20 @@ type jwtRole struct {
 	ClockSkewLeeway time.Duration `json:"clock_skew_leeway"`
 
 	// Role binding properties
-	BoundAudiences      []string               `json:"bound_audiences"`
 	BoundSubject        string                 `json:"bound_subject"`
 	BoundClaimsType     string                 `json:"bound_claims_type"`
 	BoundClaims         map[string]interface{} `json:"bound_claims"`
 	ClaimMappings       map[string]string      `json:"claim_mappings"`
 	UserClaim           string                 `json:"user_claim"`
 	GroupsClaim         string                 `json:"groups_claim"`
-	OIDCScopes          []string               `json:"oidc_scopes"`
 	AllowedRedirectURIs []string               `json:"allowed_redirect_uris"`
-	VerboseOIDCLogging  bool                   `json:"verbose_oidc_logging"`
 
 	// Deprecated by TokenParams
-	Policies   []string                      `json:"policies"`
-	NumUses    int                           `json:"num_uses"`
-	TTL        time.Duration                 `json:"ttl"`
-	MaxTTL     time.Duration                 `json:"max_ttl"`
-	Period     time.Duration                 `json:"period"`
-	BoundCIDRs []*sockaddr.SockAddrMarshaler `json:"bound_cidrs"`
+	Policies []string      `json:"policies"`
+	NumUses  int           `json:"num_uses"`
+	TTL      time.Duration `json:"ttl"`
+	MaxTTL   time.Duration `json:"max_ttl"`
+	Period   time.Duration `json:"period"`
 }
 
 // role takes a storage backend and the name and returns the role's storage
@@ -226,11 +195,6 @@ func (b *jwtAuthBackend) role(ctx context.Context, s logical.Storage, name strin
 	role := new(jwtRole)
 	if err := raw.DecodeJSON(role); err != nil {
 		return nil, err
-	}
-
-	// Report legacy roles as type "jwt"
-	if role.RoleType == "" {
-		role.RoleType = "jwt"
 	}
 
 	if role.BoundClaimsType == "" {
@@ -251,9 +215,6 @@ func (b *jwtAuthBackend) role(ctx context.Context, s logical.Storage, name strin
 	}
 	if len(role.TokenPolicies) == 0 && len(role.Policies) > 0 {
 		role.TokenPolicies = role.Policies
-	}
-	if len(role.TokenBoundCIDRs) == 0 && len(role.BoundCIDRs) > 0 {
-		role.TokenBoundCIDRs = role.BoundCIDRs
 	}
 
 	return role, nil
@@ -294,11 +255,9 @@ func (b *jwtAuthBackend) pathRoleRead(ctx context.Context, req *logical.Request,
 
 	// Create a map of data to be returned
 	d := map[string]interface{}{
-		"role_type":             role.RoleType,
 		"expiration_leeway":     int64(role.ExpirationLeeway.Seconds()),
 		"not_before_leeway":     int64(role.NotBeforeLeeway.Seconds()),
 		"clock_skew_leeway":     int64(role.ClockSkewLeeway.Seconds()),
-		"bound_audiences":       role.BoundAudiences,
 		"bound_subject":         role.BoundSubject,
 		"bound_claims_type":     role.BoundClaimsType,
 		"bound_claims":          role.BoundClaims,
@@ -306,17 +265,12 @@ func (b *jwtAuthBackend) pathRoleRead(ctx context.Context, req *logical.Request,
 		"user_claim":            role.UserClaim,
 		"groups_claim":          role.GroupsClaim,
 		"allowed_redirect_uris": role.AllowedRedirectURIs,
-		"oidc_scopes":           role.OIDCScopes,
-		"verbose_oidc_logging":  role.VerboseOIDCLogging,
 	}
 
 	role.PopulateTokenData(d)
 
 	if len(role.Policies) > 0 {
 		d["policies"] = d["token_policies"]
-	}
-	if len(role.BoundCIDRs) > 0 {
-		d["bound_cidrs"] = d["token_bound_cidrs"]
 	}
 	if role.TTL > 0 {
 		d["ttl"] = int64(role.TTL.Seconds())
@@ -373,15 +327,6 @@ func (b *jwtAuthBackend) pathRoleCreateUpdate(ctx context.Context, req *logical.
 		role = new(jwtRole)
 	}
 
-	roleType := data.Get("role_type").(string)
-	if roleType == "" {
-		roleType = "oidc"
-	}
-	if roleType != "jwt" && roleType != "oidc" {
-		return logical.ErrorResponse("invalid 'role_type': %s", roleType), nil
-	}
-	role.RoleType = roleType
-
 	if err := role.ParseTokenFields(req, data); err != nil {
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
@@ -389,10 +334,6 @@ func (b *jwtAuthBackend) pathRoleCreateUpdate(ctx context.Context, req *logical.
 	// Handle upgrade cases
 	{
 		if err := tokenutil.UpgradeValue(data, "policies", "token_policies", &role.Policies, &role.TokenPolicies); err != nil {
-			return logical.ErrorResponse(err.Error()), nil
-		}
-
-		if err := tokenutil.UpgradeValue(data, "bound_cidrs", "token_bound_cidrs", &role.BoundCIDRs, &role.TokenBoundCIDRs); err != nil {
 			return logical.ErrorResponse(err.Error()), nil
 		}
 
@@ -429,16 +370,8 @@ func (b *jwtAuthBackend) pathRoleCreateUpdate(ctx context.Context, req *logical.
 		role.ClockSkewLeeway = time.Duration(tokenClockSkewLeeway.(int)) * time.Second
 	}
 
-	if boundAudiences, ok := data.GetOk("bound_audiences"); ok {
-		role.BoundAudiences = boundAudiences.([]string)
-	}
-
 	if boundSubject, ok := data.GetOk("bound_subject"); ok {
 		role.BoundSubject = boundSubject.(string)
-	}
-
-	if verboseOIDCLoggingRaw, ok := data.GetOk("verbose_oidc_logging"); ok {
-		role.VerboseOIDCLogging = verboseOIDCLoggingRaw.(bool)
 	}
 
 	boundClaimsType := data.Get("bound_claims_type").(string)
@@ -500,28 +433,8 @@ func (b *jwtAuthBackend) pathRoleCreateUpdate(ctx context.Context, req *logical.
 		role.GroupsClaim = groupsClaim.(string)
 	}
 
-	if oidcScopes, ok := data.GetOk("oidc_scopes"); ok {
-		role.OIDCScopes = oidcScopes.([]string)
-	}
-
 	if allowedRedirectURIs, ok := data.GetOk("allowed_redirect_uris"); ok {
 		role.AllowedRedirectURIs = allowedRedirectURIs.([]string)
-	}
-
-	if role.RoleType == "oidc" && len(role.AllowedRedirectURIs) == 0 {
-		return logical.ErrorResponse(
-			"'allowed_redirect_uris' must be set if 'role_type' is 'oidc' or unspecified."), nil
-	}
-
-	// OIDC verification will enforce that the audience match the configured client_id.
-	// For other methods, require at least one bound constraint.
-	if roleType != "oidc" {
-		if len(role.BoundAudiences) == 0 &&
-			len(role.TokenBoundCIDRs) == 0 &&
-			role.BoundSubject == "" &&
-			len(role.BoundClaims) == 0 {
-			return logical.ErrorResponse("must have at least one bound constraint when creating/updating a role"), nil
-		}
 	}
 
 	// Check that the TTL value provided is less than the MaxTTL.
@@ -534,12 +447,6 @@ func (b *jwtAuthBackend) pathRoleCreateUpdate(ctx context.Context, req *logical.
 	resp := &logical.Response{}
 	if role.TokenMaxTTL > b.System().MaxLeaseTTL() {
 		resp.AddWarning("token max ttl is greater than the system or backend mount's maximum TTL value; issued tokens' max TTL value will be truncated")
-	}
-
-	if role.VerboseOIDCLogging {
-		resp.AddWarning(`verbose_oidc_logging has been enabled for this role. ` +
-			`This is not recommended in production since sensitive information ` +
-			`may be present in OIDC responses.`)
 	}
 
 	// Store the entry.

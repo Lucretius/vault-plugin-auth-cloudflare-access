@@ -42,11 +42,6 @@ func (h *CLIHandler) Auth(c *api.Client, m map[string]string) (*api.Secret, erro
 
 	doneCh := make(chan loginResp)
 
-	mount, ok := m["mount"]
-	if !ok {
-		mount = defaultMount
-	}
-
 	listenAddress, ok := m["listenaddress"]
 	if !ok {
 		listenAddress = defaultListenAddress
@@ -57,42 +52,11 @@ func (h *CLIHandler) Auth(c *api.Client, m map[string]string) (*api.Secret, erro
 		port = defaultPort
 	}
 
-	callbackHost, ok := m["callbackhost"]
-	if !ok {
-		callbackHost = defaultCallbackHost
-	}
-
-	callbackMethod, ok := m["callbackmethod"]
-	if !ok {
-		callbackMethod = defaultCallbackMethod
-	}
-
-	callbackPort, ok := m["callbackport"]
-	if !ok {
-		callbackPort = port
-	}
-
-	role := m["role"]
-
-	authURL, clientNonce, err := fetchAuthURL(c, role, mount, callbackPort, callbackMethod, callbackHost)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set up callback handler
-	http.HandleFunc("/oidc/callback", callbackHandler(c, mount, clientNonce, doneCh))
-
 	listener, err := net.Listen("tcp", listenAddress+":"+port)
 	if err != nil {
 		return nil, err
 	}
 	defer listener.Close()
-
-	// Open the default browser to the callback URL.
-	fmt.Fprintf(os.Stderr, "Complete the login via your OIDC provider. Launching browser to:\n\n    %s\n\n\n", authURL)
-	if err := openURL(authURL); err != nil {
-		fmt.Fprintf(os.Stderr, "Error attempting to automatically open browser: '%s'.\nPlease visit the authorization URL manually.", err)
-	}
 
 	// Start local server
 	go func() {
@@ -233,7 +197,7 @@ func openURL(url string) error {
 //
 //    "No response from provider.", "Gateway timeout from upstream proxy."
 func parseError(err error) (string, string) {
-	headers := []string{errNoResponse, errLoginFailed, errTokenVerification}
+	headers := []string{}
 	summary := "Login error"
 	detail := ""
 
