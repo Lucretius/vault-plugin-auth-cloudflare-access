@@ -1,7 +1,9 @@
-# Vault Plugin: JWT Auth Backend [![CircleCI](https://circleci.com/gh/hashicorp/vault-plugin-auth-jwt.svg?style=svg)](https://circleci.com/gh/hashicorp/vault-plugin-auth-jwt)
+# Vault Plugin: Cloudflare Access Auth Backend
+
+## Note!  This plugin is based off a fork of the [Vault JWT Auth Plugin](https://github.com/hashicorp/vault-plugin-auth-jwt), and has just been modified to work with Cloudflare's specific implementation of OIDC, using the programmatic token verification outlined [here](https://developers.cloudflare.com/access/setting-up-access/validate-jwt-tokens/)
 
 This is a standalone backend plugin for use with [Hashicorp Vault](https://www.github.com/hashicorp/vault).
-This plugin allows for JWTs (including OIDC tokens) to authenticate with Vault.
+This plugin allows for Cloudflare Access specific JWTs to authenticate with Vault.
 
 **Please note**: We take Vault's security and our users' trust very seriously. If you believe you have found a security issue in Vault, _please responsibly disclose_ by contacting us at [security@hashicorp.com](mailto:security@hashicorp.com).
 
@@ -22,89 +24,56 @@ To learn specifically about how plugins work, see documentation on [Vault plugin
 
 ## Usage
 
-Please see [documentation for the plugin](https://www.vaultproject.io/docs/auth/jwt.html)
-on the Vault website.
+Compile it using `go build` (inside the cmd/vault-plugin-auth-cloudflare-access folder, where `main.go` is)
 
-This plugin is currently built into Vault and by default is accessed
-at `auth/jwt`. To enable this in a running Vault server:
+This plugin will need to be added to Vault like so:
 
 ```sh
-$ vault auth enable jwt 
-Successfully enabled 'jwt' at 'jwt'!
+SHASUM=$(shasum -a 256 "<PLUGIN_BINARY_PATH>" | cut -d " " -f1) vault write sys/plugins/catalog/auth/cloudflare   sha_256="$SHASUM" \   command="vault-plugin-auth-cloudflare-access"
+Success! Data written to: sys/plugins/catalog/auth/cloudflare
 ```
-
-To see all the supported paths, see the [JWT auth backend docs](https://www.vaultproject.io/docs/auth/jwt.html).
-
-## Developing
-
-If you wish to work on this plugin, you'll first need
-[Go](https://www.golang.org) installed on your machine.
-
-For local dev first make sure Go is properly installed, including
-setting up a [GOPATH](https://golang.org/doc/code.html#GOPATH).
-Next, clone this repository into
-`$GOPATH/src/github.com/hashicorp/vault-plugin-auth-jwt`.
-You can then download any required build tools by bootstrapping your
-environment:
 
 ```sh
-$ make bootstrap
+$ vault auth enable -path=cloudflare cloudflare 
+Success! Enabled cloudflare method at: cloudflare/
 ```
 
-To compile a development version of this plugin, run `make` or `make dev`.
-This will put the plugin binary in the `bin` and `$GOPATH/bin` folders. `dev`
-mode will only generate the binary for your platform and is faster:
+## Configuration
+
+The plugin has the following configuration options:
+
+`default_role` The default role to be given to those logging in using this method
+
+`auth_domain` The domain of your Cloudflare Access configuration, i.e. https://sampledomain.cloudflareaccess.com
+
+`audience_tag` The audience tag of your Cloudflare Access application
+
+You can set them like so:
+```sh
+vault write auth/cloudflare/config auth_domain=https://<AUTH_DOMAIN>.cloudflareaccess.com default_role=<my-role> audience_tag=<CF AUDIENCE TAG>
+```
+
+Create a role:
 
 ```sh
-$ make
-$ make dev
+vault write auth/cloudflare/role/<my-role> policies=<my-policies> user_claim=<user_claim> groups_claim=<groups_claim>
 ```
 
-Put the plugin binary into a location of your choice. This directory
-will be specified as the [`plugin_directory`](https://www.vaultproject.io/docs/configuration/index.html#plugin_directory)
-in the Vault config used to start the server.
+where `user_claim` is probably something like `email`, and `groups_claim` is `groups`.  These are automatically pulled from Cloudflare's identity endpoint after the token is validated (see [Groups within a JWT](https://developers.cloudflare.com/access/setting-up-access/json-web-token/))
 
-```json
-...
-plugin_directory = "path/to/plugin/directory"
-...
+To login use your JWT you get from running 
+```sh 
+cloudflared access token -app=<CLOUDFLARE_APP>
 ```
-
-Start a Vault server with this config file:
-```sh
-$ vault server -config=path/to/config.json ...
-...
-```
-
-Once the server is started, register the plugin in the Vault server's [plugin catalog](https://www.vaultproject.io/docs/internals/plugins.html#plugin-catalog):
 
 ```sh
-$ vault write sys/plugins/catalog/jwt \
-        sha_256=<expected SHA256 Hex value of the plugin binary> \
-        command="vault-plugin-auth-jwt"
-...
-Success! Data written to: sys/plugins/catalog/jwt
+vault write auth/cloudflare/login jwt=<JWT>
 ```
 
-Note you should generate a new sha256 checksum if you have made changes
-to the plugin. Example using openssl:
-
-```sh
-openssl dgst -sha256 $GOPATH/vault-plugin-auth-jwt
-...
-SHA256(.../go/bin/vault-plugin-auth-jwt)= 896c13c0f5305daed381952a128322e02bc28a57d0c862a78cbc2ea66e8c6fa1
-```
-
-Enable the auth plugin backend using the JWT auth plugin:
-
-```sh
-$ vault auth enable -plugin-name='jwt' plugin
-...
-
-Successfully enabled 'plugin' at 'jwt'!
-```
-
+In order to use with the UI, you will need to use the generated token from the CLI login call.
 #### Tests
+
+## **Tests are currently broken!**
 
 If you are developing this plugin and want to verify it is still
 functioning (and you haven't broken anything else), we recommend

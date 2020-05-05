@@ -19,7 +19,7 @@ import (
 	"github.com/hashicorp/vault/sdk/helper/base62"
 )
 
-const defaultMount = "oidc"
+const defaultMount = "cloudflare"
 const defaultListenAddress = "localhost"
 const defaultPort = "8250"
 const defaultCallbackHost = "localhost"
